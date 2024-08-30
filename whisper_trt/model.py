@@ -254,7 +254,7 @@ class WhisperTRTBuilder:
         engine = torch2trt.torch2trt(
             encoder_module, 
             [x, positional_embedding], 
-            use_onnx=True, 
+            use_onnx=True,
             min_shapes=[
                 (1, dims.n_mels, 1),
                 (1, dims.n_audio_state)
@@ -305,7 +305,6 @@ class WhisperTRTBuilder:
     @torch.no_grad()
     def build(cls, output_path: str, verbose: bool = False):
         cls.verbose = verbose
-        
         checkpoint = {
             "whisper_trt_version": __version__,
             "dims": asdict(load_model(cls.model).dims),
@@ -378,6 +377,17 @@ class EnBuilder(WhisperTRTBuilder):
             task="transcribe",
         )
         return tokenizer
+    
+class Builder(WhisperTRTBuilder):
+    @classmethod
+    def get_tokenizer(cls):
+        tokenizer = whisper.tokenizer.get_tokenizer(
+            False,
+            num_languages=99,
+            language="",
+            task="transcribe",
+        )
+        return tokenizer
 
 
 class TinyEnBuilder(EnBuilder):
@@ -390,18 +400,24 @@ class BaseEnBuilder(EnBuilder):
 
 class SmallEnBuilder(EnBuilder):
     model: str = "small.en"
+
+class MediumEnBuilder(EnBuilder):
+    model: str = "medium.en"
     
 
 MODEL_FILENAMES = {
     "tiny.en": "tiny_en_trt.pth",
     "base.en": "base_en_trt.pth",
-    "small.en": "small_en_trt.pth"
+    "small.en": "small_en_trt.pth",
+    "medium.en": "medium_en_trt.pth"
 }
 
 MODEL_BUILDERS = {
     "tiny.en": TinyEnBuilder,
     "base.en": BaseEnBuilder,
-    "small.en": SmallEnBuilder
+    "small.en": SmallEnBuilder,
+    "medium.en": MediumEnBuilder
+    
 }
 
 def load_trt_model(name: str, path: str | None = None, build: bool = True, verbose: bool = False):

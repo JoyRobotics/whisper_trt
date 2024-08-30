@@ -135,7 +135,7 @@ def load_vad(path: str | None = None, download: bool = True):
     if path is None:
         make_cache_dir()
         path = os.path.join(get_cache_dir(), SILERO_VAD_ONNX_FILENAME)
-
+    
     if not os.path.exists(path):
         if not download:
             raise RuntimeError("VAD model not found at {path}.  Please specified download=True.")
