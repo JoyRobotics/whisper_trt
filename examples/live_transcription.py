@@ -259,7 +259,7 @@ class VAD(Process):
                 energy=audio_chunk.energy,
                 time_ts=audio_chunk.time_ts,
                 is_speech=audio_chunk.is_speech
-            )
+            ) 
             
             max_filter_window.append(chunk)
             is_voice = any(c.voice_prob > self.speech_threshold for c in max_filter_window)
