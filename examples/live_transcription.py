@@ -268,7 +268,7 @@ class VAD(Process):
 
                 start_count = start_count + 1
 
-            if start_count >= 0:
+            if start_count >= 3:
 
                 if is_voice > prev_is_voice:
                     # start = True
