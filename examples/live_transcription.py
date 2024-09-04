@@ -141,7 +141,7 @@ class Microphone(Process):
         self.mic_tuning = Tuning(self.get_usb_device())
         # self.mic_tuning.set_vad_threshold(3.5)
         self.mic_tuning.write("AGCONOFF",0)
-        # self.mic_tuning.write("AGCDESIREDLEVEL",1e-5)
+        self.mic_tuning.write("AGCDESIREDLEVEL",1e-5)
 
     def calculate_audio_energy(self, audio_numpy: np.ndarray) -> float:
         # Calculate the energy of the audio signal
@@ -304,7 +304,7 @@ class VAD(Process):
                 if end_start_count >= 1:
                     start_count = 0
                     end_start_count = 0
-                # print(f"[{send_time}]无人说话: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech}) , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
+                print(f"[{send_time}]无人说话: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech}) , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
 
 
 
