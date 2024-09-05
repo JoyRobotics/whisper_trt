@@ -236,10 +236,13 @@ class VAD(Process):
         speech_chunks = []
 
         prev_is_voice = False
+        prev_is_speech = False
 
         start_count = 0
 
         end_start_count = 0
+
+        start = False
 
         if self.ready_flag is not None:
             self.ready_flag.set()
@@ -263,49 +266,57 @@ class VAD(Process):
             
             max_filter_window.append(chunk)
             is_voice = any(c.voice_prob > self.speech_threshold for c in max_filter_window)
+            is_speech_count = sum(1 for c in max_filter_window if c.is_speech > 0)
+            not_speech_count = sum(1 for c in max_filter_window if c.is_speech <= 0)
+            is_speech = is_speech_count >= 4 and is_voice
+
+            # if not_speech_count >= 4:
+            #     is_speech = False
+
             send_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-            if is_voice and chunk.is_speech and start_count < 3:
+            # if is_speech and start_count < 3:
 
-                start_count = start_count + 1
+            #     start_count = start_count + 1
 
-            if start_count >= 3:
+            # if start_count >= 1:
 
-                if is_voice > prev_is_voice:
-                    # start = True
-                    speech_chunks = [chunk for chunk in max_filter_window]
-                    # start voice
-                    speech_chunks.append(chunk)
-                    if self.speech_start_flag is not None:
-                        self.speech_start_flag.set()
-                    print(f"[{send_time}]开始说话: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech}) , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
-                    json_str = json.dumps({"type":1}, indent=4)
-                    self._redis.publish(
-                        f"SENSOR:VISION:10001", json_str)
-                elif is_voice < prev_is_voice:
-                    # end voice
-                    start_count = 0
-                    segment = AudioSegment(chunks=speech_chunks)
-                    self.output_queue.put(segment)
-                    if self.speech_end_flag is not None:
-                        self.speech_end_flag.set()
-                    print(f"[{send_time}]说话结束: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech}) , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
-                elif is_voice:
-                    # continue voice
-                    # start = True
-                    speech_chunks.append(chunk)
-                    self._redis.publish(
-                        f"ROBOT:10001:INTERRUPT", 1)
-                    print(f"[{send_time}]说话中: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech}) , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
+            if is_speech > prev_is_speech and start == False:
+                start = True
+                speech_chunks = [chunk for chunk in max_filter_window]
+                # start voice
+                speech_chunks.append(chunk)
+                if self.speech_start_flag is not None:
+                    self.speech_start_flag.set()
+                print(f"[{send_time}]开始说话: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech},{is_speech}) , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
+                json_str = json.dumps({"type":1}, indent=4)
+                self._redis.publish(
+                    f"SENSOR:VISION:10001", json_str)
+            elif voice_prob < self.speech_threshold and start:
+                # end voice
+                start_count = 0
+                start = False
+                segment = AudioSegment(chunks=speech_chunks)
+                self.output_queue.put(segment)
+                if self.speech_end_flag is not None:
+                    self.speech_end_flag.set()
+                print(f"[{send_time}]说话结束: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech},{is_speech})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
+            elif is_voice and start:
+                # continue voice
+                # start = True
+                speech_chunks.append(chunk)
+                # self._redis.publish(f"ROBOT:10001:INTERRUPT", 1)
+                print(f"[{send_time}]说话中: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech},{is_speech})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
 
-                prev_is_voice = is_voice
             else:
                 if chunk.is_speech == False:
                     end_start_count = end_start_count + 1
                 if end_start_count >= 1:
                     start_count = 0
                     end_start_count = 0
-                print(f"[{send_time}]无人说话: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech}) , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
+                print(f"[{send_time}]无人说话: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech},{is_speech})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
 
+            prev_is_voice = is_voice
+            prev_is_speech = is_speech
 
 
 class ASR(Process):
