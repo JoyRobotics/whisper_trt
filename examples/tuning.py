@@ -145,15 +145,21 @@ class Tuning:
     def set_vad_threshold(self, db):
         self.write('GAMMAVAD_SR', db)
 
+    @property
     def is_voice(self):
         return self.read('VOICEACTIVITY')
     
+    @property
     def is_speech(self):
         return self.read('SPEECHDETECTED')
 
     @property
     def direction(self):
         return self.read('DOAANGLE')
+    
+    @property
+    def aecsilence_mode(self):
+        return self.read('AECSILENCEMODE')
 
     @property
     def version(self):

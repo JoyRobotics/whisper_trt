@@ -22,6 +22,7 @@
 
 import datetime
 import json
+import os
 import numpy as np
 import time
 import pyaudio
@@ -37,6 +38,7 @@ from whisper_trt.model import load_trt_model
 from base_redis import BaseRedis
 from tuning import Tuning
 import usb.core
+import soundfile as sf
 
 from nano_llm.utils import audio_db,audio_rms
 
@@ -81,7 +83,7 @@ def get_respeaker_audio_stream(
         channels=channels,
         input=True,
         input_device_index=device_index,
-        # frames_per_buffer=1536
+        frames_per_buffer=1024 * 2
     )
 
     try:
@@ -114,6 +116,8 @@ class AudioChunk:
     time_ts: float = 0.0,
     doa: int = 0,
     is_speech: bool = False,
+    is_mic_voice: bool = False,
+    is_aec_silence: bool = True
 
 
 @dataclass
@@ -139,9 +143,11 @@ class Microphone(Process):
         self.sample_rate = sample_rate
 
         self.mic_tuning = Tuning(self.get_usb_device())
-        # self.mic_tuning.set_vad_threshold(3.5)
+        self.mic_tuning.set_vad_threshold(2)
+        self.mic_tuning.write("AECNORM",16)
         self.mic_tuning.write("AGCONOFF",0)
-        self.mic_tuning.write("AGCDESIREDLEVEL",1e-5)
+        self.mic_tuning.write("AGCGAIN",15.918223351240158)
+        # self.mic_tuning.write("AGCDESIREDLEVEL",1e-5)
 
     def calculate_audio_energy(self, audio_numpy: np.ndarray) -> float:
         # Calculate the energy of the audio signal
@@ -183,10 +189,11 @@ class Microphone(Process):
                 audio_numpy = np.stack([audio_numpy_slice_channel(audio_numpy, i, self.num_channels) for i in range(self.num_channels)])
                 audio_numpy_normalized = audio_numpy_normalize(audio_numpy)
                 audio_energy = self.calculate_audio_energy(audio_numpy_normalized[self.use_channel])
-                # doa = int(self.mic_tuning.direction)
-                doa = 0
-                is_speech = bool(self.mic_tuning.is_speech())
-                audio_energy = audio_rms(audio_raw)
+                doa = int(self.mic_tuning.direction)
+                is_speech = bool(self.mic_tuning.is_speech)
+                is_mic_voice = bool(self.mic_tuning.is_voice)
+                is_aec_silence = bool(self.mic_tuning.aecsilence_mode)
+                audio_energy = audio_db(audio_raw)
                 audio = AudioChunk(
                     audio_raw=audio_raw,
                     audio_numpy=audio_numpy,
@@ -194,7 +201,10 @@ class Microphone(Process):
                     energy=audio_energy,
                     time_ts=time.time(),
                     doa=doa,
-                    is_speech=is_speech
+                    is_speech=is_speech,
+                    is_mic_voice=is_mic_voice,
+                    is_aec_silence=is_aec_silence
+                    
                 )
                 self.output_queue.put(audio)
 
@@ -236,22 +246,17 @@ class VAD(Process):
         speech_chunks = []
 
         prev_is_voice = False
-        prev_is_speech = False
-
-        start_count = 0
-
-        end_start_count = 0
 
         start = False
+
+        listen_ack_flag = False
 
         if self.ready_flag is not None:
             self.ready_flag.set()
 
         while True:
             
-
             audio_chunk = self.input_queue.get()
-
             voice_prob = float(vad(audio_chunk.audio_numpy_normalized[self.use_channel], sr=self.sample_rate).flatten()[0])
             chunk = AudioChunk(
                 audio_raw=audio_chunk.audio_raw,
@@ -261,62 +266,66 @@ class VAD(Process):
                 doa=audio_chunk.doa,
                 energy=audio_chunk.energy,
                 time_ts=audio_chunk.time_ts,
-                is_speech=audio_chunk.is_speech
+                is_speech=audio_chunk.is_speech,
+                is_mic_voice=audio_chunk.is_mic_voice,
+                is_aec_silence=audio_chunk.is_aec_silence
             ) 
             
             max_filter_window.append(chunk)
             is_voice = any(c.voice_prob > self.speech_threshold for c in max_filter_window)
             is_speech_count = sum(1 for c in max_filter_window if c.is_speech > 0)
-            not_speech_count = sum(1 for c in max_filter_window if c.is_speech <= 0)
-            is_speech = is_speech_count >= 4 and is_voice
+            is_mic_voice_count = sum(1 for c in max_filter_window if c.is_mic_voice > 0)
 
-            # if not_speech_count >= 4:
-            #     is_speech = False
 
             send_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
-            # if is_speech and start_count < 3:
 
-            #     start_count = start_count + 1
+            if chunk.is_aec_silence:
+                max_filter = 2
+            else:
+                max_filter = 4
 
-            # if start_count >= 1:
-
-            if is_speech > prev_is_speech and start == False:
+            if is_mic_voice_count >= max_filter and is_speech_count >= max_filter and not start and chunk.energy > -20:
                 start = True
+
+            if is_voice > prev_is_voice and start:
                 speech_chunks = [chunk for chunk in max_filter_window]
                 # start voice
                 speech_chunks.append(chunk)
                 if self.speech_start_flag is not None:
                     self.speech_start_flag.set()
-                print(f"[{send_time}]开始说话: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech},{is_speech}) , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
                 json_str = json.dumps({"type":1}, indent=4)
-                self._redis.publish(
-                    f"SENSOR:VISION:10001", json_str)
-            elif voice_prob < self.speech_threshold and start:
+                self._redis.publish(f"SENSOR:VISION:10001", json_str)
+
+                print(f"[{send_time}]开始说话: is_voice({is_voice}) , doa({chunk.doa}) , mic({chunk.is_speech},{chunk.is_mic_voice}) , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts}) ,is_aec_silence({chunk.is_aec_silence})")
+                start_time = time.time()
+            elif is_voice < prev_is_voice and start:
                 # end voice
-                start_count = 0
+                print(f"[{send_time}]说话结束: is_voice({is_voice}) , doa({chunk.doa}) , mic({chunk.is_speech},{chunk.is_mic_voice})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts}) ,is_aec_silence({chunk.is_aec_silence})")
                 start = False
+                listen_ack_flag = False
                 segment = AudioSegment(chunks=speech_chunks)
                 self.output_queue.put(segment)
                 if self.speech_end_flag is not None:
                     self.speech_end_flag.set()
-                print(f"[{send_time}]说话结束: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech},{is_speech})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
             elif is_voice and start:
-                # continue voice
-                # start = True
+                # in progress
                 speech_chunks.append(chunk)
-                self._redis.publish(f"ROBOT:10001:INTERRUPT", 1)
-                print(f"[{send_time}]说话中: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech},{is_speech})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
+                in_progress_time = time.time() - start_time
+                if in_progress_time > 0.5:
+                    self._redis.publish(f"ROBOT:10001:INTERRUPT", 1)
+                if in_progress_time > 2 and not listen_ack_flag:
+                    listen_ack_flag = True
+                    self._redis.publish(f"ROBOT:10001:LISTEN_ACK", 1)
+                print(f"[{send_time}]说话中: is_voice({is_voice}) , doa({chunk.doa}) , mic({chunk.is_speech},{chunk.is_mic_voice})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts}) ,is_aec_silence({chunk.is_aec_silence})")
 
             else:
-                if chunk.is_speech == False:
-                    end_start_count = end_start_count + 1
-                if end_start_count >= 1:
-                    start_count = 0
-                    end_start_count = 0
-                print(f"[{send_time}]无人说话: is_voice({is_voice}) , doa({chunk.doa}) , is_speech({chunk.is_speech},{is_speech})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts})")
+                # no voice
+                start = False
+                is_voice = False
+                print(f"[{send_time}]无人说话: is_voice({is_voice}) , doa({chunk.doa}) , mic({chunk.is_speech},{chunk.is_mic_voice})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts}) ,is_aec_silence({chunk.is_aec_silence})")
 
             prev_is_voice = is_voice
-            prev_is_speech = is_speech
+
 
 
 class ASR(Process):
@@ -374,6 +383,14 @@ class ASR(Process):
             t1 = time.perf_counter_ns()
 
             text = self.check_and_return_string(text)
+
+                # 使用时间戳命名规则
+            # timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')  # 生成时间戳，例如 20230905_120530
+            # filename = f"output_{timestamp}.wav"  # 根据时间戳生成文件名
+            # full_filename = os.path.join("/opt/deploy/joy_robotic/libs/mic", filename)  # 生成完整路径
+
+            # # 保存音频为文件
+            # sf.write(full_filename, audio, 16000)  # 保存到指定路径下的带时间戳的文件
 
             if text != "":
                 result_dict = {
