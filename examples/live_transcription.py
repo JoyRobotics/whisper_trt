@@ -284,7 +284,7 @@ class VAD(Process):
             else:
                 max_filter = 4
 
-            if is_mic_voice_count >= max_filter and is_speech_count >= max_filter and not start and chunk.energy > -20:
+            if is_mic_voice_count >= max_filter and is_speech_count >= max_filter and not start and chunk.energy > -25:
                 start = True
 
             if is_voice > prev_is_voice and start:
