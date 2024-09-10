@@ -143,7 +143,7 @@ class Microphone(Process):
         self.sample_rate = sample_rate
 
         self.mic_tuning = Tuning(self.get_usb_device())
-        self.mic_tuning.set_vad_threshold(2)
+        self.mic_tuning.set_vad_threshold(6)
         self.mic_tuning.write("AECNORM",16)
         self.mic_tuning.write("AGCONOFF",0)
         self.mic_tuning.write("AGCGAIN",15.918223351240158)
@@ -280,7 +280,7 @@ class VAD(Process):
             send_time = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")
 
             if chunk.is_aec_silence:
-                max_filter = 2
+                max_filter = 3
             else:
                 max_filter = 4
 
