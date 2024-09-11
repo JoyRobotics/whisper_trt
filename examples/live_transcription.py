@@ -309,14 +309,14 @@ class VAD(Process):
                     self.speech_end_flag.set()
 
                 # 触发语气词
-                self._redis.publish(f"ROBOT:10001:INTERRUPT", 1)
+                self._redis.publish(f"ROBOT:10001:LISTEN_ACK", 1)
 
             elif is_voice and start:
                 # in progress
                 speech_chunks.append(chunk)
                 in_progress_time = time.time() - start_time
-                # if in_progress_time > 0.5:
-                #     self._redis.publish(f"ROBOT:10001:INTERRUPT", 1)
+                if in_progress_time > 0.5:
+                    self._redis.publish(f"ROBOT:10001:INTERRUPT", 1)
                 # if in_progress_time > 2 and not listen_ack_flag:
                 #     listen_ack_flag = True
                 #     self._redis.publish(f"ROBOT:10001:LISTEN_ACK", 1)
