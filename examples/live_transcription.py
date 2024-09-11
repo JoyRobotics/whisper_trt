@@ -307,15 +307,19 @@ class VAD(Process):
                 self.output_queue.put(segment)
                 if self.speech_end_flag is not None:
                     self.speech_end_flag.set()
+
+                # 触发语气词
+                self._redis.publish(f"ROBOT:10001:INTERRUPT", 1)
+
             elif is_voice and start:
                 # in progress
                 speech_chunks.append(chunk)
                 in_progress_time = time.time() - start_time
-                if in_progress_time > 0.5:
-                    self._redis.publish(f"ROBOT:10001:INTERRUPT", 1)
-                if in_progress_time > 2 and not listen_ack_flag:
-                    listen_ack_flag = True
-                    self._redis.publish(f"ROBOT:10001:LISTEN_ACK", 1)
+                # if in_progress_time > 0.5:
+                #     self._redis.publish(f"ROBOT:10001:INTERRUPT", 1)
+                # if in_progress_time > 2 and not listen_ack_flag:
+                #     listen_ack_flag = True
+                #     self._redis.publish(f"ROBOT:10001:LISTEN_ACK", 1)
                 print(f"[{send_time}]说话中: is_voice({is_voice}) , doa({chunk.doa}) , mic({chunk.is_speech},{chunk.is_mic_voice})  , energy({chunk.energy}) , voice_prob({voice_prob}) , time_ts({chunk.time_ts}) ,is_aec_silence({chunk.is_aec_silence})")
 
             else:
