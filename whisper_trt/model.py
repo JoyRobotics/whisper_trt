@@ -20,6 +20,8 @@
 # DEALINGS IN THE SOFTWARE.
 
 import argparse
+import string
+
 from whisper import load_model
 from whisper.model import LayerNorm, Linear, Tensor, ModelDimensions, sinusoids, Whisper
 from whisper.tokenizer import Tokenizer
@@ -168,17 +170,58 @@ class WhisperTRT(nn.Module):
             self.tokenizer.sot
         ]).cuda()[None, ...]
 
+        # 用于存储每个 token 的置信度
+        confidences = []
+
+        # 准备好标点符号集合
+        punct_set = set(string.punctuation)
+
         for i in range(self.dims.n_text_ctx):
+            # 计算当前 logits
             logits = self.logits(tokens, audio_features)
-            next_tokens = logits.argmax(dim=-1)
-            tokens = torch.cat([tokens, next_tokens[:, -1:]], dim=-1)
+
+            # softmax 计算概率分布
+            probs = torch.softmax(logits[:, -1, :], dim=-1)
+
+            # 选择概率最大的 token
+            next_token = torch.argmax(probs, dim=-1)
+            confidence = probs[0, next_token.item()].item()
+
+            # next_token 的形状是 [1]，先把它转成纯 Python int
+            token_id = next_token.item()
+
+            # 用 decode 把单个 token id 变成字符串
+            token_text = self.tokenizer.decode([token_id])
+            print(f"confidence: {confidence} token 对应的文字是：{token_text}")
+
+            # 如果 token_text 不是纯标点，就记录置信度
+            if not all(ch in punct_set for ch in token_text):
+                confidences.append(confidence)
+
+            # 将新生成的 token 拼接到序列末尾
+            tokens = torch.cat([tokens, next_token[:, None]], dim=-1)
+
+            # 如果遇到结束标记，则退出循环
             if tokens[0, -1] == self.tokenizer.eot:
                 break
-        tokens = tokens[:, 2:]
-        tokens = tokens[:, :-1]
+
+        tokens = tokens[:, 2:]      # 删除前两个特殊标记：起始标记和第一个生成的占位
+        tokens = tokens[:, :-1]     # 删除最后一个结束标记
+
+        # 计算平均置信度，只保留真实词语的置信度
         text = self.tokenizer.decode(list([int(x) for x in tokens.flatten()]))
-        
-        result = {"text": text}
+
+        # 计算平均置信度
+        # 只保留下标 1 到 len(confidences)-2 的元素
+        real_probs = confidences[1:-1]
+        if real_probs:
+            avg_conf = sum(real_probs) / len(real_probs)
+        else:
+            avg_conf = 0.0
+
+        print(f"confidences {real_probs}")
+        print(f"avg_conf {avg_conf}")
+        result = {"text": text, "avg_conf": avg_conf}
         return result
 
 
